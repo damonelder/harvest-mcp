@@ -76,6 +76,57 @@ export function registerTools(
   config: Config
 ): void {
   // ============================================
+  // SESSION BOOTSTRAP
+  // ============================================
+
+  // Registered first so it is always present in the active tool context.
+  // claude.ai's tool_search only surfaces subsets of a large manifest, so
+  // calling harvest_init at the start of a billing session pulls the full
+  // list of Harvest tool names into context.
+  const REGISTERED_TOOLS = [
+    'harvest_init',
+    'harvest_get_company',
+    'harvest_get_current_user',
+    'harvest_list_users',
+    'harvest_list_time_entries',
+    'harvest_get_time_entry',
+    'harvest_create_time_entry',
+    'harvest_stop_timer',
+    'harvest_delete_time_entry',
+    'harvest_update_time_entry',
+    'harvest_list_clients',
+    'harvest_list_contacts',
+    'harvest_list_projects',
+    'harvest_list_invoices',
+    'harvest_create_invoice',
+    'harvest_add_invoice_line_items',
+    'harvest_list_expenses',
+    'harvest_list_tasks',
+    'harvest_get_rates',
+    'harvest_resolve_entities',
+    'harvest_compute_profitability',
+    'harvest_compute_utilization',
+    'harvest_aggregate_time',
+    'harvest_compute_budget_performance',
+    'harvest_get_schema',
+  ];
+
+  server.tool(
+    'harvest_init',
+    'Initialize a Harvest billing session by loading the full list of available Harvest tools into context. Call this first when starting work so every harvest_* tool is discoverable, even when tool search only surfaces a subset.',
+    {},
+    async () => {
+      const summary = {
+        tool_count: REGISTERED_TOOLS.length,
+        tools: REGISTERED_TOOLS,
+      };
+      return {
+        content: [{ type: 'text', text: JSON.stringify(summary, null, 2) }],
+      };
+    }
+  );
+
+  // ============================================
   // ACCOUNT & COMPANY TOOLS
   // ============================================
 

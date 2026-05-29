@@ -157,8 +157,9 @@ export function registerTools(
         };
       } catch (error) {
         if (error instanceof HarvestApiError) {
+          const detail = error.errorBody ? `\n${error.errorBody}` : '';
           return {
-            content: [{ type: 'text', text: `Harvest API error: ${error.message}` }],
+            content: [{ type: 'text', text: `Harvest API error: ${error.message}${detail}` }],
             isError: true,
           };
         }
@@ -194,8 +195,9 @@ export function registerTools(
         };
       } catch (error) {
         if (error instanceof HarvestApiError) {
+          const detail = error.errorBody ? `\n${error.errorBody}` : '';
           return {
-            content: [{ type: 'text', text: `Harvest API error: ${error.message}` }],
+            content: [{ type: 'text', text: `Harvest API error: ${error.message}${detail}` }],
             isError: true,
           };
         }
@@ -250,8 +252,9 @@ export function registerTools(
         };
       } catch (error) {
         if (error instanceof HarvestApiError) {
+          const detail = error.errorBody ? `\n${error.errorBody}` : '';
           return {
-            content: [{ type: 'text', text: `Harvest API error: ${error.message}` }],
+            content: [{ type: 'text', text: `Harvest API error: ${error.message}${detail}` }],
             isError: true,
           };
         }
@@ -315,8 +318,9 @@ export function registerTools(
         };
       } catch (error) {
         if (error instanceof HarvestApiError) {
+          const detail = error.errorBody ? `\n${error.errorBody}` : '';
           return {
-            content: [{ type: 'text', text: `Harvest API error: ${error.message}` }],
+            content: [{ type: 'text', text: `Harvest API error: ${error.message}${detail}` }],
             isError: true,
           };
         }
@@ -354,8 +358,9 @@ export function registerTools(
         };
       } catch (error) {
         if (error instanceof HarvestApiError) {
+          const detail = error.errorBody ? `\n${error.errorBody}` : '';
           return {
-            content: [{ type: 'text', text: `Harvest API error: ${error.message}` }],
+            content: [{ type: 'text', text: `Harvest API error: ${error.message}${detail}` }],
             isError: true,
           };
         }
@@ -399,8 +404,9 @@ export function registerTools(
         };
       } catch (error) {
         if (error instanceof HarvestApiError) {
+          const detail = error.errorBody ? `\n${error.errorBody}` : '';
           return {
-            content: [{ type: 'text', text: `Harvest API error: ${error.message}` }],
+            content: [{ type: 'text', text: `Harvest API error: ${error.message}${detail}` }],
             isError: true,
           };
         }
@@ -438,8 +444,9 @@ export function registerTools(
         };
       } catch (error) {
         if (error instanceof HarvestApiError) {
+          const detail = error.errorBody ? `\n${error.errorBody}` : '';
           return {
-            content: [{ type: 'text', text: `Harvest API error: ${error.message}` }],
+            content: [{ type: 'text', text: `Harvest API error: ${error.message}${detail}` }],
             isError: true,
           };
         }
@@ -477,8 +484,9 @@ export function registerTools(
         };
       } catch (error) {
         if (error instanceof HarvestApiError) {
+          const detail = error.errorBody ? `\n${error.errorBody}` : '';
           return {
-            content: [{ type: 'text', text: `Harvest API error: ${error.message}` }],
+            content: [{ type: 'text', text: `Harvest API error: ${error.message}${detail}` }],
             isError: true,
           };
         }
@@ -521,8 +529,9 @@ export function registerTools(
         };
       } catch (error) {
         if (error instanceof HarvestApiError) {
+          const detail = error.errorBody ? `\n${error.errorBody}` : '';
           return {
-            content: [{ type: 'text', text: `Harvest API error: ${error.message}` }],
+            content: [{ type: 'text', text: `Harvest API error: ${error.message}${detail}` }],
             isError: true,
           };
         }
@@ -580,8 +589,9 @@ export function registerTools(
         };
       } catch (error) {
         if (error instanceof HarvestApiError) {
+          const detail = error.errorBody ? `\n${error.errorBody}` : '';
           return {
-            content: [{ type: 'text', text: `Harvest API error: ${error.message}` }],
+            content: [{ type: 'text', text: `Harvest API error: ${error.message}${detail}` }],
             isError: true,
           };
         }
@@ -640,8 +650,9 @@ export function registerTools(
         };
       } catch (error) {
         if (error instanceof HarvestApiError) {
+          const detail = error.errorBody ? `\n${error.errorBody}` : '';
           return {
-            content: [{ type: 'text', text: `Harvest API error: ${error.message}` }],
+            content: [{ type: 'text', text: `Harvest API error: ${error.message}${detail}` }],
             isError: true,
           };
         }
@@ -700,8 +711,9 @@ export function registerTools(
         };
       } catch (error) {
         if (error instanceof HarvestApiError) {
+          const detail = error.errorBody ? `\n${error.errorBody}` : '';
           return {
-            content: [{ type: 'text', text: `Harvest API error: ${error.message}` }],
+            content: [{ type: 'text', text: `Harvest API error: ${error.message}${detail}` }],
             isError: true,
           };
         }
@@ -763,8 +775,9 @@ export function registerTools(
         };
       } catch (error) {
         if (error instanceof HarvestApiError) {
+          const detail = error.errorBody ? `\n${error.errorBody}` : '';
           return {
-            content: [{ type: 'text', text: `Harvest API error: ${error.message}` }],
+            content: [{ type: 'text', text: `Harvest API error: ${error.message}${detail}` }],
             isError: true,
           };
         }
@@ -838,8 +851,9 @@ export function registerTools(
         };
       } catch (error) {
         if (error instanceof HarvestApiError) {
+          const detail = error.errorBody ? `\n${error.errorBody}` : '';
           return {
-            content: [{ type: 'text', text: `Harvest API error: ${error.message}` }],
+            content: [{ type: 'text', text: `Harvest API error: ${error.message}${detail}` }],
             isError: true,
           };
         }
@@ -888,8 +902,9 @@ export function registerTools(
         };
       } catch (error) {
         if (error instanceof HarvestApiError) {
+          const detail = error.errorBody ? `\n${error.errorBody}` : '';
           return {
-            content: [{ type: 'text', text: `Harvest API error: ${error.message}` }],
+            content: [{ type: 'text', text: `Harvest API error: ${error.message}${detail}` }],
             isError: true,
           };
         }
@@ -952,8 +967,9 @@ export function registerTools(
         };
       } catch (error) {
         if (error instanceof HarvestApiError) {
+          const detail = error.errorBody ? `\n${error.errorBody}` : '';
           return {
-            content: [{ type: 'text', text: `Harvest API error: ${error.message}` }],
+            content: [{ type: 'text', text: `Harvest API error: ${error.message}${detail}` }],
             isError: true,
           };
         }
@@ -1011,8 +1027,9 @@ export function registerTools(
         };
       } catch (error) {
         if (error instanceof HarvestApiError) {
+          const detail = error.errorBody ? `\n${error.errorBody}` : '';
           return {
-            content: [{ type: 'text', text: `Harvest API error: ${error.message}` }],
+            content: [{ type: 'text', text: `Harvest API error: ${error.message}${detail}` }],
             isError: true,
           };
         }
@@ -1064,8 +1081,9 @@ export function registerTools(
         };
       } catch (error) {
         if (error instanceof HarvestApiError) {
+          const detail = error.errorBody ? `\n${error.errorBody}` : '';
           return {
-            content: [{ type: 'text', text: `Harvest API error: ${error.message}` }],
+            content: [{ type: 'text', text: `Harvest API error: ${error.message}${detail}` }],
             isError: true,
           };
         }
@@ -1113,8 +1131,9 @@ export function registerTools(
         };
       } catch (error) {
         if (error instanceof HarvestApiError) {
+          const detail = error.errorBody ? `\n${error.errorBody}` : '';
           return {
-            content: [{ type: 'text', text: `Harvest API error: ${error.message}` }],
+            content: [{ type: 'text', text: `Harvest API error: ${error.message}${detail}` }],
             isError: true,
           };
         }
@@ -1169,8 +1188,9 @@ export function registerTools(
         };
       } catch (error) {
         if (error instanceof HarvestApiError) {
+          const detail = error.errorBody ? `\n${error.errorBody}` : '';
           return {
-            content: [{ type: 'text', text: `Harvest API error: ${error.message}` }],
+            content: [{ type: 'text', text: `Harvest API error: ${error.message}${detail}` }],
             isError: true,
           };
         }
@@ -1221,8 +1241,9 @@ export function registerTools(
         };
       } catch (error) {
         if (error instanceof HarvestApiError) {
+          const detail = error.errorBody ? `\n${error.errorBody}` : '';
           return {
-            content: [{ type: 'text', text: `Harvest API error: ${error.message}` }],
+            content: [{ type: 'text', text: `Harvest API error: ${error.message}${detail}` }],
             isError: true,
           };
         }
@@ -1272,8 +1293,9 @@ export function registerTools(
         };
       } catch (error) {
         if (error instanceof HarvestApiError) {
+          const detail = error.errorBody ? `\n${error.errorBody}` : '';
           return {
-            content: [{ type: 'text', text: `Harvest API error: ${error.message}` }],
+            content: [{ type: 'text', text: `Harvest API error: ${error.message}${detail}` }],
             isError: true,
           };
         }
@@ -1327,8 +1349,9 @@ export function registerTools(
         };
       } catch (error) {
         if (error instanceof HarvestApiError) {
+          const detail = error.errorBody ? `\n${error.errorBody}` : '';
           return {
-            content: [{ type: 'text', text: `Harvest API error: ${error.message}` }],
+            content: [{ type: 'text', text: `Harvest API error: ${error.message}${detail}` }],
             isError: true,
           };
         }

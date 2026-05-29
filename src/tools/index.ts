@@ -678,6 +678,131 @@ export function registerTools(
     }
   );
 
+  server.tool(
+    'harvest_create_invoice',
+    'Create a new invoice for a client. Supports two modes: (1) free-form line_items where you specify items manually, and (2) line_items_import to auto-generate line items from tracked time and/or expenses for given projects and date range. You can also combine both. Invoice is created in draft state.',
+    {
+      client_id: z.number().describe('Client ID to invoice (required)'),
+      subject: z.string().optional().describe('Invoice subject/title'),
+      notes: z.string().optional().describe('Invoice notes (appears on invoice)'),
+      number: z.string().optional().describe('Custom invoice number (auto-generated if omitted)'),
+      purchase_order: z.string().optional().describe('Purchase order number'),
+      currency: z.string().optional().describe('Currency code (e.g., USD). Defaults to client currency.'),
+      issue_date: z.string().optional().describe('Issue date (YYYY-MM-DD). Defaults to today.'),
+      due_date: z.string().optional().describe('Due date (YYYY-MM-DD). Calculated from payment_term if omitted.'),
+      payment_term: z.string().optional().describe('Payment term: "upon receipt", "net 15", "net 30", "net 45", "net 60", or "custom"'),
+      tax: z.number().optional().describe('Tax rate as a percentage (e.g., 5 for 5%)'),
+      tax2: z.number().optional().describe('Second tax rate as a percentage'),
+      discount: z.number().optional().describe('Discount as a percentage'),
+      retainer_id: z.number().optional().describe('Retainer ID to draw from'),
+      estimate_id: z.number().optional().describe('Estimate ID this invoice is associated with'),
+      line_items: z.array(z.object({
+        kind: z.string().describe('Line item kind: "Service" or "Product"'),
+        description: z.string().describe('Line item description'),
+        unit_price: z.number().describe('Unit price'),
+        quantity: z.number().optional().describe('Quantity (default 1)'),
+        project_id: z.number().optional().describe('Project ID to associate this line item with'),
+        taxed: z.boolean().optional().describe('Apply primary tax to this line item'),
+        taxed2: z.boolean().optional().describe('Apply secondary tax to this line item'),
+      })).optional().describe('Free-form line items to add to the invoice'),
+      line_items_import: z.object({
+        project_ids: z.array(z.number()).describe('Project IDs to import time/expenses from'),
+        time: z.object({
+          summary_type: z.enum(['project', 'task', 'people', 'detailed']).describe('How to group time entries into line items'),
+          from: z.string().optional().describe('Start date (YYYY-MM-DD)'),
+          to: z.string().optional().describe('End date (YYYY-MM-DD)'),
+        }).optional().describe('Import tracked time as line items'),
+        expenses: z.object({
+          summary_type: z.enum(['project', 'category', 'people', 'detailed']).describe('How to group expenses into line items'),
+          from: z.string().optional().describe('Start date (YYYY-MM-DD)'),
+          to: z.string().optional().describe('End date (YYYY-MM-DD)'),
+          attach_receipt: z.boolean().optional().describe('Attach expense receipts to invoice'),
+        }).optional().describe('Import expenses as line items'),
+      }).optional().describe('Auto-generate line items from tracked time and/or expenses for the given projects'),
+    },
+    async (params) => {
+      const client = await getHarvestClient(session, sessionStore, config);
+
+      if (!client) {
+        const authUrl = getAuthUrl(session, config);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Authentication required. Please authorize the application:\n\n${authUrl}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      try {
+        const invoice = await client.createInvoice(params);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(invoice, null, 2) }],
+        };
+      } catch (error) {
+        if (error instanceof HarvestApiError) {
+          return {
+            content: [{ type: 'text', text: `Harvest API error: ${error.message}` }],
+            isError: true,
+          };
+        }
+        throw error;
+      }
+    }
+  );
+
+  server.tool(
+    'harvest_add_invoice_line_items',
+    'Add, update, or remove line items on an existing invoice. Pass an array of line_items: omit id to ADD a new item, include id to UPDATE an existing item, or include id with _destroy=true to REMOVE an item. Operations can be mixed in one call. Updates the invoice in place and returns the updated invoice.',
+    {
+      invoice_id: z.number().describe('Invoice ID to modify'),
+      line_items: z.array(z.object({
+        id: z.number().optional().describe('Existing line item ID. Omit to add a new item; include to update or destroy.'),
+        _destroy: z.boolean().optional().describe('Set true with id to remove this line item'),
+        kind: z.string().optional().describe('Line item kind: "Service" or "Product" (required for new items)'),
+        description: z.string().optional().describe('Line item description (required for new items)'),
+        unit_price: z.number().optional().describe('Unit price (required for new items)'),
+        quantity: z.number().optional().describe('Quantity'),
+        project_id: z.number().optional().describe('Project ID to associate with this line item'),
+        taxed: z.boolean().optional().describe('Apply primary tax'),
+        taxed2: z.boolean().optional().describe('Apply secondary tax'),
+      })).describe('Line items to add, update, or remove'),
+    },
+    async ({ invoice_id, line_items }) => {
+      const client = await getHarvestClient(session, sessionStore, config);
+
+      if (!client) {
+        const authUrl = getAuthUrl(session, config);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Authentication required. Please authorize the application:\n\n${authUrl}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      try {
+        const invoice = await client.updateInvoiceLineItems(invoice_id, line_items);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(invoice, null, 2) }],
+        };
+      } catch (error) {
+        if (error instanceof HarvestApiError) {
+          return {
+            content: [{ type: 'text', text: `Harvest API error: ${error.message}` }],
+            isError: true,
+          };
+        }
+        throw error;
+      }
+    }
+  );
+
   // ============================================
   // EXPENSE TOOLS
   // ============================================

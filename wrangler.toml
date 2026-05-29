@@ -1,6 +1,6 @@
 # Harvest MCP Server - Cloudflare Workers Configuration
-name = "harvest-mcp"
-account_id = "4718d49e576512c578ff94c6b1ba7d3f"
+name = "spotlight-harvest-mcp"
+account_id = "7de66f07b254ec7f4d20efbf5b008503"
 main = "src/workers/index.ts"
 compatibility_date = "2024-12-01"
 compatibility_flags = ["nodejs_compat"]
@@ -19,11 +19,11 @@ preview_urls = true
 # KV Namespaces for session and rate configuration storage
 [[kv_namespaces]]
 binding = "SESSIONS"
-id = "35b9b627e0864a5c8ddd3b2e6c350237"
+id = "68a48cdc40cc4d4eb3777845ce5c6f39"
 
 [[kv_namespaces]]
 binding = "RATES_CONFIG"
-id = "70ed4392a08544faac106f6e168fe176"
+id = "d62ce4ac2b374d22846665adb2fc9bde"
 
 # Environment variables (non-secret)
 [vars]

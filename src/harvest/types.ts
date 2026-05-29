@@ -309,6 +309,63 @@ export interface InvoicesResponse extends PaginatedResponse<Invoice> {
   invoices: Invoice[];
 }
 
+export interface CreateInvoiceLineItem {
+  kind: string;
+  description: string;
+  unit_price: number;
+  project_id?: number;
+  quantity?: number;
+  taxed?: boolean;
+  taxed2?: boolean;
+}
+
+export interface LineItemsImport {
+  project_ids: number[];
+  time?: {
+    summary_type: 'project' | 'task' | 'people' | 'detailed';
+    from?: string;
+    to?: string;
+  };
+  expenses?: {
+    summary_type: 'project' | 'category' | 'people' | 'detailed';
+    from?: string;
+    to?: string;
+    attach_receipt?: boolean;
+  };
+}
+
+export interface CreateInvoiceParams {
+  client_id: number;
+  retainer_id?: number;
+  estimate_id?: number;
+  number?: string;
+  purchase_order?: string;
+  tax?: number;
+  tax2?: number;
+  discount?: number;
+  subject?: string;
+  notes?: string;
+  currency?: string;
+  issue_date?: string;
+  due_date?: string;
+  payment_term?: string;
+  line_items?: CreateInvoiceLineItem[];
+  line_items_import?: LineItemsImport;
+  [key: string]: unknown;
+}
+
+export interface UpdateInvoiceLineItem {
+  id?: number;
+  kind?: string;
+  description?: string;
+  unit_price?: number;
+  project_id?: number;
+  quantity?: number;
+  taxed?: boolean;
+  taxed2?: boolean;
+  _destroy?: boolean;
+}
+
 // Expense
 export interface Expense {
   id: number;

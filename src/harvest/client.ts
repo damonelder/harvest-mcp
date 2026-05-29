@@ -26,6 +26,8 @@ import type {
   UpdateTimeEntryParams,
   Invoice,
   InvoicesResponse,
+  CreateInvoiceParams,
+  UpdateInvoiceLineItem,
   Expense,
   ExpensesResponse,
   Task,
@@ -496,6 +498,17 @@ export class HarvestClient {
 
   async getInvoice(id: number): Promise<WithMeta<Invoice>> {
     return this.get<Invoice>(`/invoices/${id}`);
+  }
+
+  async createInvoice(data: CreateInvoiceParams): Promise<WithMeta<Invoice>> {
+    return this.post<Invoice>('/invoices', data as unknown as Record<string, unknown>);
+  }
+
+  async updateInvoiceLineItems(
+    id: number,
+    lineItems: UpdateInvoiceLineItem[]
+  ): Promise<WithMeta<Invoice>> {
+    return this.patch<Invoice>(`/invoices/${id}`, { line_items: lineItems });
   }
 
   // ============================================

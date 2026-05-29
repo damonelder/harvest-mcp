@@ -516,6 +516,10 @@ export class HarvestClient {
     return this.patch<Invoice>(`/invoices/${id}`, data as unknown as Record<string, unknown>);
   }
 
+  async deleteInvoice(id: number): Promise<void> {
+    return this.delete(`/invoices/${id}`);
+  }
+
   // ============================================
   // Expenses
   // ============================================

@@ -101,6 +101,7 @@ export function registerTools(
     'harvest_create_invoice',
     'harvest_add_invoice_line_items',
     'harvest_update_invoice',
+    'harvest_delete_invoice',
     'harvest_list_expenses',
     'harvest_list_tasks',
     'harvest_get_rates',
@@ -950,6 +951,46 @@ export function registerTools(
         const invoice = await client.updateInvoice(invoice_id, updates);
         return {
           content: [{ type: 'text', text: JSON.stringify(invoice, null, 2) }],
+        };
+      } catch (error) {
+        if (error instanceof HarvestApiError) {
+          const detail = error.errorBody ? `\n${error.errorBody}` : '';
+          return {
+            content: [{ type: 'text', text: `Harvest API error: ${error.message}${detail}` }],
+            isError: true,
+          };
+        }
+        throw error;
+      }
+    }
+  );
+
+  server.tool(
+    'harvest_delete_invoice',
+    'Delete an invoice. Use this to remove a draft or erroneous invoice. This cannot be undone.',
+    {
+      invoice_id: z.number().describe('Invoice ID to delete'),
+    },
+    async ({ invoice_id }) => {
+      const client = await getHarvestClient(session, sessionStore, config);
+
+      if (!client) {
+        const authUrl = getAuthUrl(session, config);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Authentication required. Please authorize the application:\n\n${authUrl}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      try {
+        await client.deleteInvoice(invoice_id);
+        return {
+          content: [{ type: 'text', text: `Invoice ${invoice_id} has been deleted successfully.` }],
         };
       } catch (error) {
         if (error instanceof HarvestApiError) {

@@ -354,6 +354,20 @@ export interface CreateInvoiceParams {
   [key: string]: unknown;
 }
 
+export interface UpdateInvoiceParams {
+  subject?: string;
+  notes?: string;
+  issue_date?: string;
+  due_date?: string;
+  payment_term?: string;
+  period_start?: string;
+  period_end?: string;
+  discount?: number;
+  purchase_order?: string;
+  number?: string;
+  [key: string]: unknown;
+}
+
 export interface UpdateInvoiceLineItem {
   id?: number;
   kind?: string;

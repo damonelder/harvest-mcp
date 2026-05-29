@@ -28,6 +28,7 @@ import type {
   InvoicesResponse,
   CreateInvoiceParams,
   UpdateInvoiceLineItem,
+  UpdateInvoiceParams,
   Expense,
   ExpensesResponse,
   Task,
@@ -509,6 +510,10 @@ export class HarvestClient {
     lineItems: UpdateInvoiceLineItem[]
   ): Promise<WithMeta<Invoice>> {
     return this.patch<Invoice>(`/invoices/${id}`, { line_items: lineItems });
+  }
+
+  async updateInvoice(id: number, data: UpdateInvoiceParams): Promise<WithMeta<Invoice>> {
+    return this.patch<Invoice>(`/invoices/${id}`, data as unknown as Record<string, unknown>);
   }
 
   // ============================================

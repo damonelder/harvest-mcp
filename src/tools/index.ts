@@ -100,6 +100,7 @@ export function registerTools(
     'harvest_list_invoices',
     'harvest_create_invoice',
     'harvest_add_invoice_line_items',
+    'harvest_update_invoice',
     'harvest_list_expenses',
     'harvest_list_tasks',
     'harvest_get_rates',
@@ -897,6 +898,56 @@ export function registerTools(
 
       try {
         const invoice = await client.updateInvoiceLineItems(invoice_id, line_items);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(invoice, null, 2) }],
+        };
+      } catch (error) {
+        if (error instanceof HarvestApiError) {
+          const detail = error.errorBody ? `\n${error.errorBody}` : '';
+          return {
+            content: [{ type: 'text', text: `Harvest API error: ${error.message}${detail}` }],
+            isError: true,
+          };
+        }
+        throw error;
+      }
+    }
+  );
+
+  server.tool(
+    'harvest_update_invoice',
+    'Update an existing invoice. Provide the invoice ID plus any fields to change.',
+    {
+      invoice_id: z.number().describe('Invoice ID to update'),
+      subject: z.string().optional().describe('Invoice subject/title'),
+      notes: z.string().optional().describe('Invoice notes (appears on invoice)'),
+      issue_date: z.string().optional().describe('Issue date (YYYY-MM-DD)'),
+      due_date: z.string().optional().describe('Due date (YYYY-MM-DD)'),
+      payment_term: z.string().optional().describe('Payment term: "upon receipt", "net 15", "net 30", "net 45", "net 60", or "custom"'),
+      period_start: z.string().optional().describe('Start of the period this invoice covers (YYYY-MM-DD)'),
+      period_end: z.string().optional().describe('End of the period this invoice covers (YYYY-MM-DD)'),
+      discount: z.number().optional().describe('Discount as a percentage'),
+      purchase_order: z.string().optional().describe('Purchase order number'),
+      number: z.string().optional().describe('Custom invoice number'),
+    },
+    async ({ invoice_id, ...updates }) => {
+      const client = await getHarvestClient(session, sessionStore, config);
+
+      if (!client) {
+        const authUrl = getAuthUrl(session, config);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Authentication required. Please authorize the application:\n\n${authUrl}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      try {
+        const invoice = await client.updateInvoice(invoice_id, updates);
         return {
           content: [{ type: 'text', text: JSON.stringify(invoice, null, 2) }],
         };

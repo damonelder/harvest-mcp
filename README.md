@@ -110,7 +110,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ---
 
-## Available Tools (21)
+## Available Tools (22)
 
 ### Time Tracking
 | Tool | Description |
@@ -118,6 +118,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 | `harvest_list_time_entries` | List and filter time entries by user, client, project, date range |
 | `harvest_get_time_entry` | Get a specific time entry by ID |
 | `harvest_create_time_entry` | Create new time entries with optional timer |
+| `harvest_update_time_entry` | Update an existing time entry |
 | `harvest_stop_timer` | Stop a running timer |
 | `harvest_delete_time_entry` | Delete a time entry |
 

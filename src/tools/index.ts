@@ -436,6 +436,50 @@ export function registerTools(
     }
   );
 
+  server.tool(
+    'harvest_update_time_entry',
+    'Update an existing time entry. Provide the time entry ID plus any fields to change.',
+    {
+      id: z.number().describe('Time entry ID to update'),
+      spent_date: z.string().optional().describe('Date (YYYY-MM-DD)'),
+      hours: z.number().optional().describe('Hours logged'),
+      notes: z.string().optional().describe('Notes/description'),
+      project_id: z.number().optional().describe('Project ID'),
+      task_id: z.number().optional().describe('Task ID'),
+    },
+    async ({ id, ...updates }) => {
+      const client = await getHarvestClient(session, sessionStore, config);
+
+      if (!client) {
+        const authUrl = getAuthUrl(session, config);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Authentication required. Please authorize the application:\n\n${authUrl}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      try {
+        const timeEntry = await client.updateTimeEntry(id, updates);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(timeEntry, null, 2) }],
+        };
+      } catch (error) {
+        if (error instanceof HarvestApiError) {
+          return {
+            content: [{ type: 'text', text: `Harvest API error: ${error.message}` }],
+            isError: true,
+          };
+        }
+        throw error;
+      }
+    }
+  );
+
   // ============================================
   // CLIENT TOOLS
   // ============================================

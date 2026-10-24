@@ -558,3 +558,29 @@ describe('account allowlist fails closed', () => {
     expect(call.status).toBe(401);
   });
 });
+
+describe('uninvoiced report filtering', () => {
+  it('returns only projects with uninvoiced amounts, with totals', async () => {
+    const { tokens } = await getTokens();
+    const base = harvestFetchMock();
+    vi.stubGlobal('fetch', vi.fn(async (input: string) => {
+      if (input.startsWith('https://api.harvestapp.com/')) {
+        return Response.json({
+          results: [
+            { client_id: 1, project_id: 10, uninvoiced_hours: 2.5, uninvoiced_amount: 625, uninvoiced_expenses: 0 },
+            { client_id: 1, project_id: 11, uninvoiced_hours: 0, uninvoiced_amount: 0, uninvoiced_expenses: 0 },
+            { client_id: 2, project_id: 20, uninvoiced_hours: 0, uninvoiced_amount: 0, uninvoiced_expenses: 40 },
+          ],
+          total_entries: 3, total_pages: 1, next_page: null,
+        });
+      }
+      return base(input);
+    }));
+    await mcp(tokens.access_token, { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 't', version: '1' } } });
+    const res = await mcp(tokens.access_token, { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'harvest_report_uninvoiced', arguments: { from: '2026-10-01', to: '2026-10-24' } } });
+    const out = JSON.parse(((await res.json()) as any).result.content[0].text);
+    expect(out.projects_returned).toBe(2);
+    expect(out.projects_in_report).toBe(3);
+    expect(out.totals).toEqual({ uninvoiced_hours: 2.5, uninvoiced_amount: 625, uninvoiced_expenses: 40 });
+  });
+});

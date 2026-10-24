@@ -1397,19 +1397,41 @@ export function registerTools(
 
   tool(
     'harvest_report_uninvoiced',
-    'Harvest Reports API: uninvoiced hours and amounts per project for a date range. Use before invoicing to find billable time and expenses not yet on an invoice.',
+    'Harvest Reports API: uninvoiced hours and amounts per project for a date range. Use before invoicing to find billable time and expenses not yet on an invoice. By default only projects with something uninvoiced are returned, with totals.',
     {
       from: dateSchema.describe('Start date (YYYY-MM-DD)'),
       to: dateSchema.describe('End date (YYYY-MM-DD)'),
       include_fixed_fee: z.boolean().optional().describe('Include fixed-fee projects'),
+      client_id: z.number().optional().describe('Only this client'),
+      include_zero: z.boolean().optional().describe('Also return projects with nothing uninvoiced (default false)'),
     },
-    async ({ from, to, include_fixed_fee }) => withClient((client) =>
-      client.autoPaginate(
+    async ({ from, to, include_fixed_fee, client_id, include_zero }) => withClient(async (client) => {
+      const report = await client.autoPaginate(
         (p) => client.getUninvoicedReport({ from, to, include_fixed_fee, ...p }),
         {},
         { maxPages: 10, perPage: 2000, itemsKey: 'results' }
-      )
-    )
+      );
+      const num = (v: unknown) => (typeof v === 'number' ? v : 0);
+      const rows = (report.items as Array<Record<string, unknown>>).filter((r) =>
+        (client_id === undefined || r.client_id === client_id) &&
+        (include_zero || num(r.uninvoiced_hours) > 0 || num(r.uninvoiced_amount) > 0 || num(r.uninvoiced_expenses) > 0)
+      );
+      const round2 = (n: number) => Math.round(n * 100) / 100;
+      return {
+        from,
+        to,
+        projects_returned: rows.length,
+        projects_in_report: report.items.length,
+        totals: {
+          uninvoiced_hours: round2(rows.reduce((t, r) => t + num(r.uninvoiced_hours), 0)),
+          uninvoiced_amount: round2(rows.reduce((t, r) => t + num(r.uninvoiced_amount), 0)),
+          uninvoiced_expenses: round2(rows.reduce((t, r) => t + num(r.uninvoiced_expenses), 0)),
+        },
+        truncated: report.truncated,
+        ...(report.truncation_warning ? { truncation_warning: report.truncation_warning } : {}),
+        results: rows,
+      };
+    })
   );
 
   tool(

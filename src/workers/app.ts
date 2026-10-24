@@ -49,7 +49,7 @@ import {
   verifySignedValue,
 } from './security.js';
 
-export const SERVER_VERSION = '0.2.0';
+export const SERVER_VERSION = '0.2.1';
 
 // ---------------------------------------------------------------------------
 // Settings derived from the environment

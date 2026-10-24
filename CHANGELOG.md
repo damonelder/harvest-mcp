@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.1 (2026-10-24)
+- `harvest_report_uninvoiced` now returns only projects with uninvoiced time, amounts or expenses (`include_zero` restores the full list), adds totals and a `client_id` filter. The full report (654 projects) was too large for a chat context.
+
 ## 0.2.0 (2026-10-24) — Spotlight security and coverage release
 
 ### Security

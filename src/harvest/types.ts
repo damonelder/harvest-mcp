@@ -24,6 +24,8 @@ export interface AutoPaginateOptions {
   maxPages?: number;
   /** Results per page (default: 100, max: 2000) */
   perPage?: number;
+  /** Response key that holds the items (auto-detected when omitted) */
+  itemsKey?: string;
   /** Callback for progress updates */
   onPage?: (pageNum: number, totalPages: number) => void;
 }
@@ -475,4 +477,74 @@ export interface ExpenseFilterParams extends ListParams {
   is_billed?: boolean;
   from?: string;
   to?: string;
+}
+
+// ============================================
+// Write payloads (projects, clients, contacts, tasks, expenses, assignments)
+// ============================================
+
+export type Payload = Record<string, unknown>;
+
+export interface TaskAssignment {
+  id: number;
+  billable: boolean;
+  is_active: boolean;
+  hourly_rate: number | null;
+  budget: number | null;
+  project?: { id: number; name: string; code: string | null };
+  task: { id: number; name: string };
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaskAssignmentsResponse extends PaginatedResponse<TaskAssignment> {
+  task_assignments: TaskAssignment[];
+}
+
+export interface UserAssignment {
+  id: number;
+  is_project_manager: boolean;
+  is_active: boolean;
+  use_default_rates: boolean;
+  hourly_rate: number | null;
+  budget: number | null;
+  project?: { id: number; name: string; code: string | null };
+  user: { id: number; name: string };
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UserAssignmentsResponse extends PaginatedResponse<UserAssignment> {
+  user_assignments: UserAssignment[];
+}
+
+export interface ExpenseCategory {
+  id: number;
+  name: string;
+  unit_name: string | null;
+  unit_price: number | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ExpenseCategoriesResponse extends PaginatedResponse<ExpenseCategory> {
+  expense_categories: ExpenseCategory[];
+}
+
+// ============================================
+// Reports API
+// ============================================
+
+export type TimeReportGroup = 'clients' | 'projects' | 'tasks' | 'team';
+export type ExpenseReportGroup = 'clients' | 'projects' | 'categories' | 'team';
+
+export interface ReportParams extends ListParams {
+  from: string;
+  to: string;
+  include_fixed_fee?: boolean;
+}
+
+export interface ReportResponse extends PaginatedResponse<Record<string, unknown>> {
+  results: Record<string, unknown>[];
 }

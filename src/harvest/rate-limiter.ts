@@ -130,16 +130,19 @@ export class HarvestRateLimiter {
   }
 }
 
-// Singleton instance for the application
-let _instance: HarvestRateLimiter | null = null;
+// One limiter per Harvest account: Harvest enforces its limit per account/token,
+// so users of different accounts must not throttle each other.
+const _instances = new Map<string, HarvestRateLimiter>();
 
-export function getRateLimiter(config?: Partial<RateLimitConfig>): HarvestRateLimiter {
-  if (!_instance) {
-    _instance = new HarvestRateLimiter(config);
+export function getRateLimiter(config?: Partial<RateLimitConfig>, key = 'default'): HarvestRateLimiter {
+  let limiter = _instances.get(key);
+  if (!limiter) {
+    limiter = new HarvestRateLimiter(config);
+    _instances.set(key, limiter);
   }
-  return _instance;
+  return limiter;
 }
 
 export function resetRateLimiter(): void {
-  _instance = null;
+  _instances.clear();
 }

@@ -14,6 +14,7 @@ import type {
   UtilizationResult,
   GroupBy,
 } from './types.js';
+import { ANALYTICS_PAGINATION, collectTruncation } from './pagination.js';
 
 export class UtilizationCalculator {
   private client: HarvestClient;
@@ -46,10 +47,11 @@ export class UtilizationCalculator {
         client_id,
         ...p,
       }),
-      { per_page: 100 },
-      { maxPages: 10 }
+      {},
+      ANALYTICS_PAGINATION
     );
     const entries = entriesResult.items as TimeEntry[];
+    let usersTruncation: { truncated?: boolean; truncation_warning?: string } | undefined;
 
     // Get users for capacity calculation
     let users: User[] = [];
@@ -61,10 +63,11 @@ export class UtilizationCalculator {
       // All active users
       const usersResult = await this.client.autoPaginate(
         (p) => this.client.listUsers({ is_active: true, ...p }),
-        { per_page: 100 },
-        { maxPages: 5 }
+        {},
+        { maxPages: 5, perPage: 2000 }
       );
       users = usersResult.items as User[];
+      usersTruncation = usersResult;
     }
 
     // Calculate working days in the range
@@ -96,6 +99,7 @@ export class UtilizationCalculator {
       totals,
       grouped_results,
       _meta: {
+        ...collectTruncation(entriesResult, usersTruncation),
         entries_analyzed: entries.length,
         users_included: activeUsersCount,
       },

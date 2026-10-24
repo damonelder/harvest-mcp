@@ -1,5 +1,11 @@
 # Harvest MCP Server
 
+> **Spotlight fork (v0.2.0).** This repository is Spotlight Marketing Communications' fork of
+> southleft/harvest-mcp, deployed as a private connector. It diverges substantially from upstream:
+> hardened OAuth, encrypted token storage, Reports API and admin tools. See CHANGELOG.md.
+> Required Worker secrets: `HARVEST_CLIENT_ID`, `HARVEST_CLIENT_SECRET`, `SESSION_SECRET`.
+
+
 Connect your AI assistant to [Harvest](https://www.getharvest.com/) time tracking. Query time entries, analyze profitability, track utilization, and manage your Harvest data through natural language.
 
 **Live Server:** https://harvest-mcp.southleft.com

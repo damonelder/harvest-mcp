@@ -4,16 +4,21 @@
  * Registers all Harvest API tools with the MCP server
  */
 
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer, ToolCallback } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { ZodRawShapeCompat } from '@modelcontextprotocol/sdk/server/zod-compat.js';
+import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import * as z from 'zod';
 import type { Session, SessionStore } from '../session/types.js';
 import type { Config } from '../config.js';
 import { HarvestClient, HarvestApiError } from '../harvest/client.js';
-import { HarvestOAuth } from '../auth/oauth.js';
+import { HarvestOAuth, HarvestOAuthError } from '../auth/oauth.js';
 import { RatesService } from '../rates/index.js';
 import { EntityResolver } from '../entities/index.js';
 import { ProfitabilityCalculator, UtilizationCalculator, TimeAggregationCalculator, BudgetPerformanceCalculator } from '../compute/index.js';
 import { getSchema } from '../schema/index.js';
+
+/** Strict calendar date accepted by Harvest for spent/issue/due dates and ranges. */
+const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD');
 
 /**
  * Helper to get an authenticated Harvest client for the session
@@ -29,27 +34,43 @@ async function getHarvestClient(
   }
 
   // Check if token needs refresh
-  const now = new Date();
-  const expiresAt = new Date(session.tokenExpiresAt);
   const bufferMs = 5 * 60 * 1000; // 5 minutes
+  const isFresh = (sess: Session) =>
+    !!sess.harvestAccessToken && Date.now() + bufferMs < new Date(sess.tokenExpiresAt).getTime();
 
-  if (now.getTime() + bufferMs >= expiresAt.getTime()) {
-    // Token expired or expiring soon, try to refresh
-    try {
-      const oauth = new HarvestOAuth(config.harvest);
-      const newTokens = await oauth.refreshToken(session.harvestRefreshToken);
+  if (!isFresh(session)) {
+    // Another request (possibly in another isolate) may already have refreshed.
+    const latest = await sessionStore.get(session.id);
+    if (latest && isFresh(latest)) {
+      Object.assign(session, latest);
+    } else {
+      try {
+        const oauth = new HarvestOAuth(config.harvest);
+        const newTokens = await oauth.refreshToken((latest ?? session).harvestRefreshToken);
 
-      session.harvestAccessToken = newTokens.access_token;
-      session.harvestRefreshToken = newTokens.refresh_token;
-      session.tokenExpiresAt = new Date(Date.now() + newTokens.expires_in * 1000);
+        session.harvestAccessToken = newTokens.access_token;
+        session.harvestRefreshToken = newTokens.refresh_token;
+        session.tokenExpiresAt = new Date(Date.now() + newTokens.expires_in * 1000);
 
-      await sessionStore.set(session.id, session);
-    } catch (error) {
-      console.error('Token refresh failed:', error);
-      // Clear tokens to trigger re-authentication
-      session.harvestAccessToken = '';
-      await sessionStore.set(session.id, session);
-      return null;
+        await sessionStore.set(session.id, session);
+      } catch (error) {
+        if (error instanceof HarvestOAuthError && error.isInvalidGrant) {
+          // A concurrent request may have rotated the refresh token first;
+          // if so, adopt its result instead of logging the user out.
+          const after = await sessionStore.get(session.id);
+          if (after && isFresh(after)) {
+            Object.assign(session, after);
+            return new HarvestClient(session.harvestAccessToken, session.harvestAccountId, { userAgent: 'HarvestMCP/0.2.0' });
+          }
+          // Harvest revoked or expired the grant: force re-authorization.
+          console.error('Harvest token refresh rejected; clearing session tokens');
+          session.harvestAccessToken = '';
+          await sessionStore.set(session.id, session);
+          return null;
+        }
+        // Transient failure (network, Harvest 5xx): keep the session intact.
+        throw new Error('Could not refresh the Harvest token right now (temporary error). Please try again shortly.');
+      }
     }
   }
 
@@ -61,12 +82,64 @@ async function getHarvestClient(
 }
 
 /**
- * Helper to generate authentication URL for elicitation
+ * Message returned when the Harvest authorization has lapsed. Re-authorization
+ * happens through the MCP client's connector flow (the next request receives a
+ * 401 and the client restarts OAuth), not through a link in tool output.
  */
-function getAuthUrl(session: Session, config: Config): string {
-  const oauth = new HarvestOAuth(config.harvest);
-  const state = HarvestOAuth.generateState(session.id);
-  return oauth.getAuthorizationUrl(state);
+const AUTH_REQUIRED_MESSAGE =
+  'Harvest authorization has expired. Reconnect the Harvest connector in Claude ' +
+  '(Settings > Connectors) and try again.';
+
+/**
+ * MCP tool annotations by naming convention. Clients use these to decide how
+ * prominently to ask for approval; deletes are flagged destructive.
+ */
+export function annotationsFor(name: string): ToolAnnotations {
+  if (name === 'harvest_init' || name === 'harvest_get_schema') {
+    return { readOnlyHint: true, openWorldHint: false };
+  }
+  if (/^harvest_delete_/.test(name)) {
+    return { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true };
+  }
+  if (/^harvest_(create|add|assign|restart)_/.test(name)) {
+    return { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true };
+  }
+  if (name === 'harvest_update_invoice') {
+    // Can append line items, so repeating it is not safe.
+    return { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true };
+  }
+  if (/^harvest_(update|stop)_/.test(name)) {
+    return { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true };
+  }
+  return { readOnlyHint: true, openWorldHint: true };
+}
+
+/** Wrap an API failure as a tool error result (keeps Harvest's error body). */
+function apiErrorResult(error: unknown) {
+  if (error instanceof HarvestApiError) {
+    const detail = error.errorBody ? `\n${error.errorBody}` : '';
+    return {
+      content: [{ type: 'text' as const, text: `Harvest API error: ${error.message}${detail}` }],
+      isError: true,
+    };
+  }
+  if (error instanceof Error) {
+    return { content: [{ type: 'text' as const, text: error.message }], isError: true };
+  }
+  throw error;
+}
+
+function authRequiredResult() {
+  return { content: [{ type: 'text' as const, text: AUTH_REQUIRED_MESSAGE }], isError: true };
+}
+
+function jsonResult(value: unknown) {
+  return { content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }] };
+}
+
+/** Drop undefined values so PATCH bodies only carry fields the caller set. */
+function compact<T extends Record<string, unknown>>(obj: T): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined));
 }
 
 export function registerTools(
@@ -79,41 +152,26 @@ export function registerTools(
   // SESSION BOOTSTRAP
   // ============================================
 
+  // Every tool is registered through this wrapper so it carries annotations
+  // and appears in harvest_init's list automatically.
+  const REGISTERED_TOOLS: string[] = [];
+  const rawTool = server.tool.bind(server) as (...args: unknown[]) => unknown;
+  function tool<Args extends ZodRawShapeCompat>(
+    name: string,
+    description: string,
+    schema: Args,
+    cb: ToolCallback<Args>
+  ): void {
+    REGISTERED_TOOLS.push(name);
+    rawTool(name, description, schema, annotationsFor(name), cb);
+  }
+
   // Registered first so it is always present in the active tool context.
   // claude.ai's tool_search only surfaces subsets of a large manifest, so
   // calling harvest_init at the start of a billing session pulls the full
   // list of Harvest tool names into context.
-  const REGISTERED_TOOLS = [
-    'harvest_init',
-    'harvest_get_company',
-    'harvest_get_current_user',
-    'harvest_list_users',
-    'harvest_list_time_entries',
-    'harvest_get_time_entry',
-    'harvest_create_time_entry',
-    'harvest_stop_timer',
-    'harvest_delete_time_entry',
-    'harvest_update_time_entry',
-    'harvest_list_clients',
-    'harvest_list_contacts',
-    'harvest_list_projects',
-    'harvest_list_invoices',
-    'harvest_create_invoice',
-    'harvest_add_invoice_line_items',
-    'harvest_update_invoice',
-    'harvest_delete_invoice',
-    'harvest_list_expenses',
-    'harvest_list_tasks',
-    'harvest_get_rates',
-    'harvest_resolve_entities',
-    'harvest_compute_profitability',
-    'harvest_compute_utilization',
-    'harvest_aggregate_time',
-    'harvest_compute_budget_performance',
-    'harvest_get_schema',
-  ];
 
-  server.tool(
+  tool(
     'harvest_init',
     'Initialize a Harvest billing session by loading the full list of available Harvest tools into context. Call this first when starting work so every harvest_* tool is discoverable, even when tool search only surfaces a subset.',
     {},
@@ -132,7 +190,7 @@ export function registerTools(
   // ACCOUNT & COMPANY TOOLS
   // ============================================
 
-  server.tool(
+  tool(
     'harvest_get_company',
     'Get information about the authenticated Harvest company/account',
     {},
@@ -140,16 +198,7 @@ export function registerTools(
       const client = await getHarvestClient(session, sessionStore, config);
 
       if (!client) {
-        const authUrl = getAuthUrl(session, config);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Authentication required. Please authorize the application:\n\n${authUrl}`,
-            },
-          ],
-          isError: true,
-        };
+        return authRequiredResult();
       }
 
       try {
@@ -170,7 +219,7 @@ export function registerTools(
     }
   );
 
-  server.tool(
+  tool(
     'harvest_get_current_user',
     'Get information about the currently authenticated Harvest user',
     {},
@@ -178,16 +227,7 @@ export function registerTools(
       const client = await getHarvestClient(session, sessionStore, config);
 
       if (!client) {
-        const authUrl = getAuthUrl(session, config);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Authentication required. Please authorize the application:\n\n${authUrl}`,
-            },
-          ],
-          isError: true,
-        };
+        return authRequiredResult();
       }
 
       try {
@@ -208,7 +248,7 @@ export function registerTools(
     }
   );
 
-  server.tool(
+  tool(
     'harvest_list_users',
     'List all users in the Harvest account with optional filters',
     {
@@ -222,16 +262,7 @@ export function registerTools(
       const client = await getHarvestClient(session, sessionStore, config);
 
       if (!client) {
-        const authUrl = getAuthUrl(session, config);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Authentication required. Please authorize the application:\n\n${authUrl}`,
-            },
-          ],
-          isError: true,
-        };
+        return authRequiredResult();
       }
 
       try {
@@ -269,7 +300,7 @@ export function registerTools(
   // TIME ENTRY TOOLS
   // ============================================
 
-  server.tool(
+  tool(
     'harvest_list_time_entries',
     'List time entries with optional filters (user, client, project, date range, etc.)',
     {
@@ -278,8 +309,8 @@ export function registerTools(
       project_id: z.number().optional().describe('Filter by project ID'),
       is_billed: z.boolean().optional().describe('Filter by billed status'),
       is_running: z.boolean().optional().describe('Filter by running timer'),
-      from: z.string().optional().describe('Start date (YYYY-MM-DD)'),
-      to: z.string().optional().describe('End date (YYYY-MM-DD)'),
+      from: isoDate.optional().describe('Start date (YYYY-MM-DD)'),
+      to: isoDate.optional().describe('End date (YYYY-MM-DD)'),
       page: z.number().optional().describe('Page number'),
       per_page: z.number().optional().describe('Results per page (1-2000)'),
       auto_paginate: z.boolean().optional().describe('Automatically fetch all pages (max 10 pages)'),
@@ -288,16 +319,7 @@ export function registerTools(
       const client = await getHarvestClient(session, sessionStore, config);
 
       if (!client) {
-        const authUrl = getAuthUrl(session, config);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Authentication required. Please authorize the application:\n\n${authUrl}`,
-            },
-          ],
-          isError: true,
-        };
+        return authRequiredResult();
       }
 
       try {
@@ -331,7 +353,7 @@ export function registerTools(
     }
   );
 
-  server.tool(
+  tool(
     'harvest_get_time_entry',
     'Get a specific time entry by ID',
     {
@@ -341,16 +363,7 @@ export function registerTools(
       const client = await getHarvestClient(session, sessionStore, config);
 
       if (!client) {
-        const authUrl = getAuthUrl(session, config);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Authentication required. Please authorize the application:\n\n${authUrl}`,
-            },
-          ],
-          isError: true,
-        };
+        return authRequiredResult();
       }
 
       try {
@@ -371,13 +384,13 @@ export function registerTools(
     }
   );
 
-  server.tool(
+  tool(
     'harvest_create_time_entry',
     'Create a new time entry',
     {
       project_id: z.number().describe('Project ID'),
       task_id: z.number().describe('Task ID'),
-      spent_date: z.string().describe('Date (YYYY-MM-DD)'),
+      spent_date: isoDate.describe('Date (YYYY-MM-DD)'),
       hours: z.number().optional().describe('Hours to log (omit to start timer)'),
       notes: z.string().optional().describe('Notes/description'),
       started_time: z.string().optional().describe('Start time (HH:MM, 12h format like "9:00am")'),
@@ -387,16 +400,7 @@ export function registerTools(
       const client = await getHarvestClient(session, sessionStore, config);
 
       if (!client) {
-        const authUrl = getAuthUrl(session, config);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Authentication required. Please authorize the application:\n\n${authUrl}`,
-            },
-          ],
-          isError: true,
-        };
+        return authRequiredResult();
       }
 
       try {
@@ -417,7 +421,7 @@ export function registerTools(
     }
   );
 
-  server.tool(
+  tool(
     'harvest_stop_timer',
     'Stop a running timer on a time entry',
     {
@@ -427,16 +431,7 @@ export function registerTools(
       const client = await getHarvestClient(session, sessionStore, config);
 
       if (!client) {
-        const authUrl = getAuthUrl(session, config);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Authentication required. Please authorize the application:\n\n${authUrl}`,
-            },
-          ],
-          isError: true,
-        };
+        return authRequiredResult();
       }
 
       try {
@@ -457,7 +452,7 @@ export function registerTools(
     }
   );
 
-  server.tool(
+  tool(
     'harvest_delete_time_entry',
     'Delete a time entry. Use this to remove erroneous or unwanted time entries.',
     {
@@ -467,16 +462,7 @@ export function registerTools(
       const client = await getHarvestClient(session, sessionStore, config);
 
       if (!client) {
-        const authUrl = getAuthUrl(session, config);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Authentication required. Please authorize the application:\n\n${authUrl}`,
-            },
-          ],
-          isError: true,
-        };
+        return authRequiredResult();
       }
 
       try {
@@ -497,12 +483,12 @@ export function registerTools(
     }
   );
 
-  server.tool(
+  tool(
     'harvest_update_time_entry',
     'Update an existing time entry. Provide the time entry ID plus any fields to change.',
     {
       id: z.number().describe('Time entry ID to update'),
-      spent_date: z.string().optional().describe('Date (YYYY-MM-DD)'),
+      spent_date: isoDate.optional().describe('Date (YYYY-MM-DD)'),
       hours: z.number().optional().describe('Hours logged'),
       notes: z.string().optional().describe('Notes/description'),
       project_id: z.number().optional().describe('Project ID'),
@@ -512,16 +498,7 @@ export function registerTools(
       const client = await getHarvestClient(session, sessionStore, config);
 
       if (!client) {
-        const authUrl = getAuthUrl(session, config);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Authentication required. Please authorize the application:\n\n${authUrl}`,
-            },
-          ],
-          isError: true,
-        };
+        return authRequiredResult();
       }
 
       try {
@@ -546,7 +523,7 @@ export function registerTools(
   // CLIENT TOOLS
   // ============================================
 
-  server.tool(
+  tool(
     'harvest_list_clients',
     'List all clients. Note: Client contacts (people) are available via harvest_list_contacts tool.',
     {
@@ -559,16 +536,7 @@ export function registerTools(
       const client = await getHarvestClient(session, sessionStore, config);
 
       if (!client) {
-        const authUrl = getAuthUrl(session, config);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Authentication required. Please authorize the application:\n\n${authUrl}`,
-            },
-          ],
-          isError: true,
-        };
+        return authRequiredResult();
       }
 
       try {
@@ -606,7 +574,7 @@ export function registerTools(
   // CLIENT CONTACT TOOLS
   // ============================================
 
-  server.tool(
+  tool(
     'harvest_list_contacts',
     'List client contacts (people associated with clients). Filter by client_id to get contacts for a specific client. Returns contact details including name, title, email, and phone numbers.',
     {
@@ -620,16 +588,7 @@ export function registerTools(
       const client = await getHarvestClient(session, sessionStore, config);
 
       if (!client) {
-        const authUrl = getAuthUrl(session, config);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Authentication required. Please authorize the application:\n\n${authUrl}`,
-            },
-          ],
-          isError: true,
-        };
+        return authRequiredResult();
       }
 
       try {
@@ -667,7 +626,7 @@ export function registerTools(
   // PROJECT TOOLS
   // ============================================
 
-  server.tool(
+  tool(
     'harvest_list_projects',
     'List all projects',
     {
@@ -681,16 +640,7 @@ export function registerTools(
       const client = await getHarvestClient(session, sessionStore, config);
 
       if (!client) {
-        const authUrl = getAuthUrl(session, config);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Authentication required. Please authorize the application:\n\n${authUrl}`,
-            },
-          ],
-          isError: true,
-        };
+        return authRequiredResult();
       }
 
       try {
@@ -728,15 +678,15 @@ export function registerTools(
   // INVOICE TOOLS
   // ============================================
 
-  server.tool(
+  tool(
     'harvest_list_invoices',
     'List invoices with optional filters',
     {
       client_id: z.number().optional().describe('Filter by client ID'),
       project_id: z.number().optional().describe('Filter by project ID'),
       state: z.enum(['draft', 'open', 'paid', 'closed']).optional().describe('Filter by invoice state'),
-      from: z.string().optional().describe('Issue date from (YYYY-MM-DD)'),
-      to: z.string().optional().describe('Issue date to (YYYY-MM-DD)'),
+      from: isoDate.optional().describe('Issue date from (YYYY-MM-DD)'),
+      to: isoDate.optional().describe('Issue date to (YYYY-MM-DD)'),
       page: z.number().optional().describe('Page number'),
       per_page: z.number().optional().describe('Results per page'),
       auto_paginate: z.boolean().optional().describe('Automatically fetch all pages (max 10 pages)'),
@@ -745,16 +695,7 @@ export function registerTools(
       const client = await getHarvestClient(session, sessionStore, config);
 
       if (!client) {
-        const authUrl = getAuthUrl(session, config);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Authentication required. Please authorize the application:\n\n${authUrl}`,
-            },
-          ],
-          isError: true,
-        };
+        return authRequiredResult();
       }
 
       try {
@@ -788,7 +729,7 @@ export function registerTools(
     }
   );
 
-  server.tool(
+  tool(
     'harvest_create_invoice',
     'Create a new invoice for a client. Supports two modes: (1) free-form line_items where you specify items manually, and (2) line_items_import to auto-generate line items from tracked time and/or expenses for given projects and date range. You can also combine both. Invoice is created in draft state.',
     {
@@ -798,8 +739,8 @@ export function registerTools(
       number: z.string().optional().describe('Custom invoice number (auto-generated if omitted)'),
       purchase_order: z.string().optional().describe('Purchase order number'),
       currency: z.string().optional().describe('Currency code (e.g., USD). Defaults to client currency.'),
-      issue_date: z.string().optional().describe('Issue date (YYYY-MM-DD). Defaults to today.'),
-      due_date: z.string().optional().describe('Due date (YYYY-MM-DD). Calculated from payment_term if omitted.'),
+      issue_date: isoDate.optional().describe('Issue date (YYYY-MM-DD). Defaults to today.'),
+      due_date: isoDate.optional().describe('Due date (YYYY-MM-DD). Calculated from payment_term if omitted.'),
       payment_term: z.string().optional().describe('Payment term: "upon receipt", "net 15", "net 30", "net 45", "net 60", or "custom"'),
       tax: z.number().optional().describe('Tax rate as a percentage (e.g., 5 for 5%)'),
       tax2: z.number().optional().describe('Second tax rate as a percentage'),
@@ -819,13 +760,13 @@ export function registerTools(
         project_ids: z.array(z.number()).describe('Project IDs to import time/expenses from'),
         time: z.object({
           summary_type: z.enum(['project', 'task', 'people', 'detailed']).describe('How to group time entries into line items'),
-          from: z.string().optional().describe('Start date (YYYY-MM-DD)'),
-          to: z.string().optional().describe('End date (YYYY-MM-DD)'),
+          from: isoDate.optional().describe('Start date (YYYY-MM-DD)'),
+          to: isoDate.optional().describe('End date (YYYY-MM-DD)'),
         }).optional().describe('Import tracked time as line items'),
         expenses: z.object({
           summary_type: z.enum(['project', 'category', 'people', 'detailed']).describe('How to group expenses into line items'),
-          from: z.string().optional().describe('Start date (YYYY-MM-DD)'),
-          to: z.string().optional().describe('End date (YYYY-MM-DD)'),
+          from: isoDate.optional().describe('Start date (YYYY-MM-DD)'),
+          to: isoDate.optional().describe('End date (YYYY-MM-DD)'),
           attach_receipt: z.boolean().optional().describe('Attach expense receipts to invoice'),
         }).optional().describe('Import expenses as line items'),
       }).optional().describe('Auto-generate line items from tracked time and/or expenses for the given projects'),
@@ -834,16 +775,7 @@ export function registerTools(
       const client = await getHarvestClient(session, sessionStore, config);
 
       if (!client) {
-        const authUrl = getAuthUrl(session, config);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Authentication required. Please authorize the application:\n\n${authUrl}`,
-            },
-          ],
-          isError: true,
-        };
+        return authRequiredResult();
       }
 
       try {
@@ -864,7 +796,7 @@ export function registerTools(
     }
   );
 
-  server.tool(
+  tool(
     'harvest_add_invoice_line_items',
     'Add, update, or remove line items on an existing invoice. Pass an array of line_items: omit id to ADD a new item, include id to UPDATE an existing item, or include id with _destroy=true to REMOVE an item. Operations can be mixed in one call. Updates the invoice in place and returns the updated invoice.',
     {
@@ -885,16 +817,7 @@ export function registerTools(
       const client = await getHarvestClient(session, sessionStore, config);
 
       if (!client) {
-        const authUrl = getAuthUrl(session, config);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Authentication required. Please authorize the application:\n\n${authUrl}`,
-            },
-          ],
-          isError: true,
-        };
+        return authRequiredResult();
       }
 
       try {
@@ -915,18 +838,18 @@ export function registerTools(
     }
   );
 
-  server.tool(
+  tool(
     'harvest_update_invoice',
     'Update an existing invoice. Provide the invoice ID plus any fields to change.',
     {
       invoice_id: z.number().describe('Invoice ID to update'),
       subject: z.string().optional().describe('Invoice subject/title'),
       notes: z.string().optional().describe('Invoice notes (appears on invoice)'),
-      issue_date: z.string().optional().describe('Issue date (YYYY-MM-DD)'),
-      due_date: z.string().optional().describe('Due date (YYYY-MM-DD)'),
+      issue_date: isoDate.optional().describe('Issue date (YYYY-MM-DD)'),
+      due_date: isoDate.optional().describe('Due date (YYYY-MM-DD)'),
       payment_term: z.string().optional().describe('Payment term: "upon receipt", "net 15", "net 30", "net 45", "net 60", or "custom"'),
-      period_start: z.string().optional().describe('Start of the period this invoice covers (YYYY-MM-DD)'),
-      period_end: z.string().optional().describe('End of the period this invoice covers (YYYY-MM-DD)'),
+      period_start: isoDate.optional().describe('Start of the period this invoice covers (YYYY-MM-DD)'),
+      period_end: isoDate.optional().describe('End of the period this invoice covers (YYYY-MM-DD)'),
       discount: z.number().optional().describe('Discount as a percentage'),
       purchase_order: z.string().optional().describe('Purchase order number'),
       number: z.string().optional().describe('Custom invoice number'),
@@ -935,16 +858,7 @@ export function registerTools(
       const client = await getHarvestClient(session, sessionStore, config);
 
       if (!client) {
-        const authUrl = getAuthUrl(session, config);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Authentication required. Please authorize the application:\n\n${authUrl}`,
-            },
-          ],
-          isError: true,
-        };
+        return authRequiredResult();
       }
 
       try {
@@ -965,7 +879,7 @@ export function registerTools(
     }
   );
 
-  server.tool(
+  tool(
     'harvest_delete_invoice',
     'Delete an invoice. Use this to remove a draft or erroneous invoice. This cannot be undone.',
     {
@@ -975,16 +889,7 @@ export function registerTools(
       const client = await getHarvestClient(session, sessionStore, config);
 
       if (!client) {
-        const authUrl = getAuthUrl(session, config);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Authentication required. Please authorize the application:\n\n${authUrl}`,
-            },
-          ],
-          isError: true,
-        };
+        return authRequiredResult();
       }
 
       try {
@@ -1009,7 +914,7 @@ export function registerTools(
   // EXPENSE TOOLS
   // ============================================
 
-  server.tool(
+  tool(
     'harvest_list_expenses',
     'List expenses with optional filters',
     {
@@ -1017,8 +922,8 @@ export function registerTools(
       client_id: z.number().optional().describe('Filter by client ID'),
       project_id: z.number().optional().describe('Filter by project ID'),
       is_billed: z.boolean().optional().describe('Filter by billed status'),
-      from: z.string().optional().describe('Spent date from (YYYY-MM-DD)'),
-      to: z.string().optional().describe('Spent date to (YYYY-MM-DD)'),
+      from: isoDate.optional().describe('Spent date from (YYYY-MM-DD)'),
+      to: isoDate.optional().describe('Spent date to (YYYY-MM-DD)'),
       page: z.number().optional().describe('Page number'),
       per_page: z.number().optional().describe('Results per page'),
       auto_paginate: z.boolean().optional().describe('Automatically fetch all pages (max 10 pages)'),
@@ -1027,16 +932,7 @@ export function registerTools(
       const client = await getHarvestClient(session, sessionStore, config);
 
       if (!client) {
-        const authUrl = getAuthUrl(session, config);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Authentication required. Please authorize the application:\n\n${authUrl}`,
-            },
-          ],
-          isError: true,
-        };
+        return authRequiredResult();
       }
 
       try {
@@ -1074,7 +970,7 @@ export function registerTools(
   // TASK TOOLS
   // ============================================
 
-  server.tool(
+  tool(
     'harvest_list_tasks',
     'List all tasks (used for time entry assignment)',
     {
@@ -1087,16 +983,7 @@ export function registerTools(
       const client = await getHarvestClient(session, sessionStore, config);
 
       if (!client) {
-        const authUrl = getAuthUrl(session, config);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Authentication required. Please authorize the application:\n\n${authUrl}`,
-            },
-          ],
-          isError: true,
-        };
+        return authRequiredResult();
       }
 
       try {
@@ -1134,7 +1021,7 @@ export function registerTools(
   // RATES TOOLS
   // ============================================
 
-  server.tool(
+  tool(
     'harvest_get_rates',
     'Get cost and billable rates for users and projects. Fetches from Harvest API with fallback to rates.json config file and DEFAULT_COST_RATE environment variable.',
     {
@@ -1147,16 +1034,7 @@ export function registerTools(
       const client = await getHarvestClient(session, sessionStore, config);
 
       if (!client) {
-        const authUrl = getAuthUrl(session, config);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Authentication required. Please authorize the application:\n\n${authUrl}`,
-            },
-          ],
-          isError: true,
-        };
+        return authRequiredResult();
       }
 
       try {
@@ -1188,7 +1066,7 @@ export function registerTools(
   // ENTITY RESOLUTION TOOL
   // ============================================
 
-  server.tool(
+  tool(
     'harvest_resolve_entities',
     'Resolve entity names to IDs using fuzzy matching. Searches clients, projects, users, and tasks by name with configurable confidence threshold. Useful for finding entities when you only have partial or approximate names.',
     {
@@ -1238,14 +1116,14 @@ export function registerTools(
   // COMPUTE TOOLS
   // ============================================
 
-  server.tool(
+  tool(
     'harvest_compute_profitability',
     'Compute profitability metrics for a date range. Supports three modes: time_based (hours * rates), invoice_based (actual invoices vs costs), and hybrid (invoices where available, time-based otherwise). Can group by client, project, user, task, date, week, or month.',
     {
       mode: z.enum(['time_based', 'invoice_based', 'hybrid'])
         .describe('Calculation mode: time_based (hours*rates), invoice_based (actual invoices), hybrid (invoices+unbilled)'),
-      from: z.string().describe('Start date (YYYY-MM-DD)'),
-      to: z.string().describe('End date (YYYY-MM-DD)'),
+      from: isoDate.describe('Start date (YYYY-MM-DD)'),
+      to: isoDate.describe('End date (YYYY-MM-DD)'),
       client_id: z.number().optional().describe('Filter by client ID'),
       project_id: z.number().optional().describe('Filter by project ID'),
       user_id: z.number().optional().describe('Filter by user ID'),
@@ -1291,12 +1169,12 @@ export function registerTools(
     }
   );
 
-  server.tool(
+  tool(
     'harvest_compute_utilization',
     'Compute utilization metrics for a date range. Shows how much of available capacity is being used, with billable vs non-billable breakdown. Can group by user, client, project, task, date, week, or month.',
     {
-      from: z.string().describe('Start date (YYYY-MM-DD)'),
-      to: z.string().describe('End date (YYYY-MM-DD)'),
+      from: isoDate.describe('Start date (YYYY-MM-DD)'),
+      to: isoDate.describe('End date (YYYY-MM-DD)'),
       user_id: z.number().optional().describe('Filter by user ID'),
       project_id: z.number().optional().describe('Filter by project ID'),
       client_id: z.number().optional().describe('Filter by client ID'),
@@ -1344,12 +1222,12 @@ export function registerTools(
     }
   );
 
-  server.tool(
+  tool(
     'harvest_aggregate_time',
     'Aggregate time entries by various dimensions. Simple convenience tool for getting total hours, entry counts, and billable amounts grouped by client, project, user, task, date, week, or month.',
     {
-      from: z.string().describe('Start date (YYYY-MM-DD)'),
-      to: z.string().describe('End date (YYYY-MM-DD)'),
+      from: isoDate.describe('Start date (YYYY-MM-DD)'),
+      to: isoDate.describe('End date (YYYY-MM-DD)'),
       group_by: z.array(z.enum(['client', 'project', 'user', 'task', 'date', 'week', 'month']))
         .describe('Group results by dimensions (required, can nest multiple)'),
       client_id: z.number().optional().describe('Filter by client ID'),
@@ -1396,12 +1274,12 @@ export function registerTools(
     }
   );
 
-  server.tool(
+  tool(
     'harvest_compute_budget_performance',
     'Analyze employee performance based on budget adherence per project. Compares actual hours logged vs user budget allocations, identifies top performers (under budget), and flags repeat offenders (consistently over budget). Use this for performance reviews, capacity planning, and identifying training needs.',
     {
-      from: z.string().describe('Start date (YYYY-MM-DD)'),
-      to: z.string().describe('End date (YYYY-MM-DD)'),
+      from: isoDate.describe('Start date (YYYY-MM-DD)'),
+      to: isoDate.describe('End date (YYYY-MM-DD)'),
       client_id: z.number().optional().describe('Filter by client ID'),
       project_id: z.number().optional().describe('Filter by project ID'),
       user_id: z.number().optional().describe('Filter by user ID'),
@@ -1456,7 +1334,7 @@ export function registerTools(
   // SCHEMA/DOCUMENTATION TOOLS
   // ============================================
 
-  server.tool(
+  tool(
     'harvest_get_schema',
     'Get schema definitions, field types, and enum values for Harvest entities. Use to understand available fields, data types, and valid values. No authentication required.',
     {
@@ -1478,5 +1356,365 @@ export function registerTools(
         content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
       };
     }
+  );
+
+  // ============================================
+  // v0.2.0 ADDITIONS
+  // ============================================
+
+  /** Run a Harvest call with auth handling and uniform error results. */
+  async function withClient(fn: (client: HarvestClient) => Promise<unknown>) {
+    const client = await getHarvestClient(session, sessionStore, config);
+    if (!client) return authRequiredResult();
+    try {
+      return jsonResult(await fn(client));
+    } catch (error) {
+      return apiErrorResult(error);
+    }
+  }
+
+  const dateSchema = isoDate;
+
+  // --- Reports API ---------------------------------------------------------
+
+  tool(
+    'harvest_report_time',
+    'Harvest Reports API: total hours, billable hours and billable amounts grouped by clients, projects, tasks or team for a date range (max 1 year). Aggregated by Harvest itself, so totals are exact regardless of entry count. Prefer this over harvest_aggregate_time for billing totals.',
+    {
+      group: z.enum(['clients', 'projects', 'tasks', 'team']).describe('Grouping dimension'),
+      from: dateSchema.describe('Start date (YYYY-MM-DD)'),
+      to: dateSchema.describe('End date (YYYY-MM-DD)'),
+      include_fixed_fee: z.boolean().optional().describe('Include billable amounts for fixed-fee projects'),
+    },
+    async ({ group, from, to, include_fixed_fee }) => withClient((client) =>
+      client.autoPaginate(
+        (p) => client.getTimeReport(group, { from, to, include_fixed_fee, ...p }),
+        {},
+        { maxPages: 10, perPage: 2000, itemsKey: 'results' }
+      )
+    )
+  );
+
+  tool(
+    'harvest_report_uninvoiced',
+    'Harvest Reports API: uninvoiced hours and amounts per project for a date range. Use before invoicing to find billable time and expenses not yet on an invoice.',
+    {
+      from: dateSchema.describe('Start date (YYYY-MM-DD)'),
+      to: dateSchema.describe('End date (YYYY-MM-DD)'),
+      include_fixed_fee: z.boolean().optional().describe('Include fixed-fee projects'),
+    },
+    async ({ from, to, include_fixed_fee }) => withClient((client) =>
+      client.autoPaginate(
+        (p) => client.getUninvoicedReport({ from, to, include_fixed_fee, ...p }),
+        {},
+        { maxPages: 10, perPage: 2000, itemsKey: 'results' }
+      )
+    )
+  );
+
+  tool(
+    'harvest_report_project_budget',
+    'Harvest Reports API: budget, amount spent and budget remaining for each project.',
+    {
+      is_active: z.boolean().optional().describe('Only active (true) or archived (false) projects'),
+    },
+    async ({ is_active }) => withClient((client) =>
+      client.autoPaginate(
+        (p) => client.getProjectBudgetReport({ is_active, ...p }),
+        {},
+        { maxPages: 10, perPage: 2000, itemsKey: 'results' }
+      )
+    )
+  );
+
+  tool(
+    'harvest_report_expenses',
+    'Harvest Reports API: expense totals grouped by clients, projects, categories or team for a date range (max 1 year).',
+    {
+      group: z.enum(['clients', 'projects', 'categories', 'team']).describe('Grouping dimension'),
+      from: dateSchema.describe('Start date (YYYY-MM-DD)'),
+      to: dateSchema.describe('End date (YYYY-MM-DD)'),
+    },
+    async ({ group, from, to }) => withClient((client) =>
+      client.autoPaginate(
+        (p) => client.getExpenseReport(group, { from, to, ...p }),
+        {},
+        { maxPages: 10, perPage: 2000, itemsKey: 'results' }
+      )
+    )
+  );
+
+  // --- Invoices and timers -----------------------------------------------------
+
+  tool(
+    'harvest_get_invoice',
+    'Get a single invoice by ID, including line items.',
+    { id: z.number().describe('Invoice ID') },
+    async ({ id }) => withClient((client) => client.getInvoice(id))
+  );
+
+  tool(
+    'harvest_restart_timer',
+    'Restart a stopped timer on a time entry.',
+    { id: z.number().describe('Time entry ID') },
+    async ({ id }) => withClient((client) => client.restartTimeEntry(id))
+  );
+
+  // --- Clients and contacts ----------------------------------------------------
+
+  tool(
+    'harvest_create_client',
+    'Create a new client.',
+    {
+      name: z.string().describe('Client name'),
+      is_active: z.boolean().optional(),
+      address: z.string().optional(),
+      currency: z.string().optional().describe('ISO currency code, e.g. USD'),
+    },
+    async (params) => withClient((client) => client.createClient(params))
+  );
+
+  tool(
+    'harvest_update_client',
+    'Update a client. Only the fields provided are changed. Set is_active=false to archive.',
+    {
+      id: z.number().describe('Client ID'),
+      name: z.string().optional(),
+      is_active: z.boolean().optional(),
+      address: z.string().optional(),
+      currency: z.string().optional(),
+    },
+    async ({ id, ...rest }) => withClient((client) => client.updateClient(id, compact(rest)))
+  );
+
+  const contactFields = {
+    title: z.string().optional(),
+    last_name: z.string().optional(),
+    email: z.string().optional(),
+    phone_office: z.string().optional(),
+    phone_mobile: z.string().optional(),
+    fax: z.string().optional(),
+  };
+
+  tool(
+    'harvest_create_contact',
+    'Create a client contact.',
+    {
+      client_id: z.number().describe('Client ID'),
+      first_name: z.string(),
+      ...contactFields,
+    },
+    async (params) => withClient((client) => client.createContact(compact(params)))
+  );
+
+  tool(
+    'harvest_update_contact',
+    'Update a client contact. Only the fields provided are changed.',
+    {
+      id: z.number().describe('Contact ID'),
+      client_id: z.number().optional(),
+      first_name: z.string().optional(),
+      ...contactFields,
+    },
+    async ({ id, ...rest }) => withClient((client) => client.updateContact(id, compact(rest)))
+  );
+
+  // --- Projects, tasks and assignments --------------------------------------
+
+  const projectFields = {
+    code: z.string().optional().describe('Project code, e.g. CON-1033'),
+    is_fixed_fee: z.boolean().optional(),
+    hourly_rate: z.number().optional(),
+    budget: z.number().optional(),
+    budget_is_monthly: z.boolean().optional(),
+    notify_when_over_budget: z.boolean().optional(),
+    over_budget_notification_percentage: z.number().optional(),
+    show_budget_to_all: z.boolean().optional(),
+    cost_budget: z.number().optional(),
+    cost_budget_include_expenses: z.boolean().optional(),
+    fee: z.number().optional().describe('Fixed fee amount (fixed-fee projects)'),
+    notes: z.string().optional(),
+    starts_on: dateSchema.optional(),
+    ends_on: dateSchema.optional(),
+  };
+  const billBy = z.enum(['Project', 'Tasks', 'People', 'none']);
+  const budgetBy = z.enum(['project', 'project_cost', 'task', 'task_fees', 'person', 'none']);
+
+  tool(
+    'harvest_create_project',
+    'Create a project under a client. Required: client_id, name, is_billable, bill_by, budget_by.',
+    {
+      client_id: z.number(),
+      name: z.string(),
+      is_billable: z.boolean(),
+      bill_by: billBy,
+      budget_by: budgetBy,
+      ...projectFields,
+    },
+    async (params) => withClient((client) => client.createProject(compact(params)))
+  );
+
+  tool(
+    'harvest_update_project',
+    'Update a project. Only the fields provided are changed. Set is_active=false to archive.',
+    {
+      id: z.number().describe('Project ID'),
+      client_id: z.number().optional(),
+      name: z.string().optional(),
+      is_active: z.boolean().optional(),
+      is_billable: z.boolean().optional(),
+      bill_by: billBy.optional(),
+      budget_by: budgetBy.optional(),
+      ...projectFields,
+    },
+    async ({ id, ...rest }) => withClient((client) => client.updateProject(id, compact(rest)))
+  );
+
+  tool(
+    'harvest_create_task',
+    'Create a task (account-wide task list).',
+    {
+      name: z.string(),
+      billable_by_default: z.boolean().optional(),
+      default_hourly_rate: z.number().optional(),
+      is_default: z.boolean().optional().describe('Add to future projects automatically'),
+      is_active: z.boolean().optional(),
+    },
+    async (params) => withClient((client) => client.createTask(compact(params)))
+  );
+
+  tool(
+    'harvest_update_task',
+    'Update a task. Only the fields provided are changed.',
+    {
+      id: z.number().describe('Task ID'),
+      name: z.string().optional(),
+      billable_by_default: z.boolean().optional(),
+      default_hourly_rate: z.number().optional(),
+      is_default: z.boolean().optional(),
+      is_active: z.boolean().optional(),
+    },
+    async ({ id, ...rest }) => withClient((client) => client.updateTask(id, compact(rest)))
+  );
+
+  tool(
+    'harvest_list_project_task_assignments',
+    'List the tasks assigned to a project (with billable flags and rates).',
+    {
+      project_id: z.number(),
+      is_active: z.boolean().optional(),
+    },
+    async ({ project_id, is_active }) => withClient((client) =>
+      client.autoPaginate(
+        (p) => client.listProjectTaskAssignments(project_id, { is_active, ...p }),
+        {},
+        { maxPages: 5, perPage: 2000, itemsKey: 'task_assignments' }
+      )
+    )
+  );
+
+  tool(
+    'harvest_assign_task_to_project',
+    'Assign an existing task to a project so time can be logged against it.',
+    {
+      project_id: z.number(),
+      task_id: z.number(),
+      is_active: z.boolean().optional(),
+      billable: z.boolean().optional(),
+      hourly_rate: z.number().optional(),
+      budget: z.number().optional(),
+    },
+    async ({ project_id, ...rest }) => withClient((client) =>
+      client.createProjectTaskAssignment(project_id, compact(rest))
+    )
+  );
+
+  tool(
+    'harvest_list_project_user_assignments',
+    'List the people assigned to a project.',
+    {
+      project_id: z.number(),
+      is_active: z.boolean().optional(),
+    },
+    async ({ project_id, is_active }) => withClient((client) =>
+      client.autoPaginate(
+        (p) => client.listProjectUserAssignments(project_id, { is_active, ...p }),
+        {},
+        { maxPages: 5, perPage: 2000, itemsKey: 'user_assignments' }
+      )
+    )
+  );
+
+  tool(
+    'harvest_assign_user_to_project',
+    'Assign a user to a project (e.g., onboarding a team member to a client project).',
+    {
+      project_id: z.number(),
+      user_id: z.number(),
+      is_project_manager: z.boolean().optional(),
+      use_default_rates: z.boolean().optional(),
+      hourly_rate: z.number().optional(),
+      budget: z.number().optional(),
+    },
+    async ({ project_id, ...rest }) => withClient((client) =>
+      client.createProjectUserAssignment(project_id, compact(rest))
+    )
+  );
+
+  // --- Expenses ------------------------------------------------------------------
+
+  tool(
+    'harvest_list_expense_categories',
+    'List expense categories (needed to create expenses).',
+    { is_active: z.boolean().optional() },
+    async ({ is_active }) => withClient((client) =>
+      client.autoPaginate(
+        (p) => client.listExpenseCategories({ is_active, ...p }),
+        {},
+        { maxPages: 5, perPage: 2000, itemsKey: 'expense_categories' }
+      )
+    )
+  );
+
+  tool(
+    'harvest_create_expense',
+    'Create an expense on a project (e.g., a pass-through cost to bill the client). Provide total_cost, or units for unit-based categories.',
+    {
+      project_id: z.number(),
+      expense_category_id: z.number(),
+      spent_date: dateSchema.describe('YYYY-MM-DD'),
+      user_id: z.number().optional().describe('Defaults to the authenticated user'),
+      units: z.number().optional(),
+      total_cost: z.number().optional(),
+      notes: z.string().optional(),
+      billable: z.boolean().optional(),
+    },
+    async (params) => withClient((client) => client.createExpense(compact(params)))
+  );
+
+  tool(
+    'harvest_update_expense',
+    'Update an expense. Only the fields provided are changed.',
+    {
+      id: z.number().describe('Expense ID'),
+      project_id: z.number().optional(),
+      expense_category_id: z.number().optional(),
+      spent_date: dateSchema.optional(),
+      units: z.number().optional(),
+      total_cost: z.number().optional(),
+      notes: z.string().optional(),
+      billable: z.boolean().optional(),
+    },
+    async ({ id, ...rest }) => withClient((client) => client.updateExpense(id, compact(rest)))
+  );
+
+  tool(
+    'harvest_delete_expense',
+    'Delete an expense. Cannot be undone; fails if the expense is invoiced or locked.',
+    { id: z.number().describe('Expense ID') },
+    async ({ id }) => withClient(async (client) => {
+      await client.deleteExpense(id);
+      return { deleted: true, id };
+    })
   );
 }

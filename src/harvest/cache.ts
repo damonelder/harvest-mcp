@@ -2,7 +2,9 @@
  * LRU Cache for Harvest API responses
  * 
  * Caches GET request responses with configurable TTL.
- * Cache keys are generated from the request path and parameters.
+ * Cache keys are generated from a caller scope (Harvest account + token
+ * fingerprint), the request path and parameters, so one user's cached
+ * responses are never served to another user sharing the same isolate.
  */
 
 import { LRUCache } from 'lru-cache';
@@ -27,7 +29,7 @@ export interface CacheStats {
 
 const DEFAULT_CONFIG: CacheConfig = {
   maxSize: 500,
-  ttlMs: 60000, // 60 seconds
+  ttlMs: 15000, // 15 seconds: other isolates may not see a write's invalidation
 };
 
 export class HarvestCache {
@@ -47,19 +49,31 @@ export class HarvestCache {
   }
 
   /**
-   * Generate a cache key from request path and parameters
+   * Generate a cache key: "<scope>|<path>:<hash of path+params>".
+   * The scope must identify the caller (see HarvestClient), never be empty.
    */
-  static generateKey(path: string, params?: Record<string, unknown>): string {
-    const normalizedParams = params 
-      ? JSON.stringify(Object.entries(params).sort(([a], [b]) => a.localeCompare(b)))
+  static generateKey(scope: string, path: string, params?: Record<string, unknown>): string {
+    if (!scope) throw new Error('Cache scope is required');
+    const normalizedParams = params
+      ? JSON.stringify(
+          Object.entries(params)
+            .filter(([, v]) => v !== undefined)
+            .sort(([a], [b]) => a.localeCompare(b))
+        )
       : '';
-    
+
     const hash = createHash('sha256')
       .update(path + normalizedParams)
       .digest('hex')
-      .substring(0, 12);
-    
-    return `${path}:${hash}`;
+      .substring(0, 16);
+
+    return `${scope}|${path}:${hash}`;
+  }
+
+  /** Fingerprint used as a cache scope: account ID + truncated token hash. */
+  static scopeFor(accountId: string, accessToken: string): string {
+    const fp = createHash('sha256').update(accessToken).digest('hex').substring(0, 16);
+    return `${accountId}:${fp}`;
   }
 
   /**

@@ -14,6 +14,7 @@ import type {
   TimeAggregationResult,
   GroupBy,
 } from './types.js';
+import { ANALYTICS_PAGINATION, collectTruncation } from './pagination.js';
 
 export class TimeAggregationCalculator {
   private client: HarvestClient;
@@ -52,9 +53,10 @@ export class TimeAggregationCalculator {
         ...filterParams,
         ...p,
       }),
-      { per_page: 100 },
-      { maxPages: 10 }
+      {},
+      ANALYTICS_PAGINATION
     );
+    const truncation = collectTruncation(entriesResult);
     let entries = entriesResult.items as TimeEntry[];
 
     // Filter billable only if requested
@@ -76,6 +78,7 @@ export class TimeAggregationCalculator {
       grouped_results,
       _meta: {
         entries_analyzed: entries.length,
+        ...truncation,
       },
     };
   }

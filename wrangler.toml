@@ -7,7 +7,8 @@ compatibility_flags = ["nodejs_compat"]
 
 # Enable workers.dev subdomain
 workers_dev = true
-preview_urls = true
+# Preview versions would share production KV and secrets.
+preview_urls = false
 
 # Workers Paid features
 # CPU time limit: 30 seconds (vs 10ms free tier)
@@ -29,13 +30,24 @@ id = "d62ce4ac2b374d22846665adb2fc9bde"
 [vars]
 ENVIRONMENT = "production"
 LOG_LEVEL = "info"
-SESSION_TTL_HOURS = "24"
+# MCP access token lifetime (hours); refresh tokens rotate and last REFRESH_TOKEN_TTL_DAYS.
+SESSION_TTL_HOURS = "1"
+REFRESH_TOKEN_TTL_DAYS = "30"
+# Hard cap on a Harvest session before re-authorization is required.
+SESSION_MAX_DAYS = "90"
 ALLOWED_ORIGINS = "https://claude.ai,https://app.claude.ai"
+# OAuth redirect URIs must exactly match one of these (loopback is always allowed for desktop clients).
+ALLOWED_REDIRECT_URIS = "https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback"
+# Only these Harvest accounts may connect (comma-separated). Empty = nobody (outside
+# ENVIRONMENT=development); "*" = any account.
+ALLOWED_HARVEST_ACCOUNT_IDS = "571704"
+# Accept client_ids registered before v0.2.0 (never persisted). Set "false" after everyone reconnects.
+ALLOW_UNREGISTERED_CLIENTS = "true"
 
 # Secrets (set via `wrangler secret put`)
 # - HARVEST_CLIENT_ID
 # - HARVEST_CLIENT_SECRET
-# - SESSION_SECRET
+# - SESSION_SECRET  (required; 32+ random characters. Encrypts Harvest tokens in KV and signs OAuth state.)
 
 # Development environment
 [env.dev]
@@ -45,7 +57,7 @@ vars = { ENVIRONMENT = "development", LOG_LEVEL = "debug" }
 # Preview/Staging environment
 [env.staging]
 name = "harvest-mcp-staging"
-vars = { ENVIRONMENT = "staging", LOG_LEVEL = "info" }
+vars = { ENVIRONMENT = "staging", LOG_LEVEL = "info", ALLOWED_HARVEST_ACCOUNT_IDS = "571704" }
 
 # Production routes (optional - configure custom domain)
 # [[routes]]

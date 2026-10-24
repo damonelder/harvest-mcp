@@ -60,6 +60,8 @@ export interface ProfitabilityResponse {
   grouped_results?: ProfitabilityResult[];
   warnings: string[];
   _meta: {
+    truncated?: boolean;
+    truncation_warnings?: string[];
     entries_analyzed: number;
     invoices_analyzed: number;
     calculation_details: string;
@@ -117,6 +119,8 @@ export interface UtilizationResponse {
   totals: UtilizationMetrics;
   grouped_results?: UtilizationResult[];
   _meta: {
+    truncated?: boolean;
+    truncation_warnings?: string[];
     entries_analyzed: number;
     users_included: number;
   };
@@ -170,6 +174,8 @@ export interface TimeAggregationResponse {
   totals: TimeAggregationMetrics;
   grouped_results: TimeAggregationResult[];
   _meta: {
+    truncated?: boolean;
+    truncation_warnings?: string[];
     entries_analyzed: number;
   };
 }
@@ -264,6 +270,8 @@ export interface BudgetPerformanceResponse {
   over_budget_repeat_offenders: Array<{ user_id: number; user_name: string; projects_over: number; total_variance_hours: number }>;
   warnings: string[];
   _meta: {
+    truncated?: boolean;
+    truncation_warnings?: string[];
     entries_analyzed: number;
     projects_analyzed: number;
     calculation_details: string;

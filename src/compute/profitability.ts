@@ -18,6 +18,7 @@ import type {
   GroupBy,
 } from './types.js';
 import { RatesService } from '../rates/index.js';
+import { ANALYTICS_PAGINATION, collectTruncation } from './pagination.js';
 
 export class ProfitabilityCalculator {
   private client: HarvestClient;
@@ -54,10 +55,11 @@ export class ProfitabilityCalculator {
         user_id,
         ...p,
       }),
-      { per_page: 100 },
-      { maxPages: 10 }
+      {},
+      ANALYTICS_PAGINATION
     );
     const entries = entriesResult.items as TimeEntry[];
+    let invoicesTruncation: { truncated?: boolean; truncation_warning?: string } | undefined;
 
     // Fetch invoices if needed for invoice_based or hybrid mode
     let invoices: Invoice[] = [];
@@ -70,10 +72,11 @@ export class ProfitabilityCalculator {
           project_id,
           ...p,
         }),
-        { per_page: 100 },
-        { maxPages: 10 }
+        {},
+        ANALYTICS_PAGINATION
       );
       invoices = invoicesResult.items as Invoice[];
+      invoicesTruncation = invoicesResult;
     }
 
     // Get rate information for missing rates
@@ -120,6 +123,9 @@ export class ProfitabilityCalculator {
       grouped_results = this.groupResults(entries, invoices, mode, group_by, rateMap, include_non_billable, warnings);
     }
 
+    const truncation = collectTruncation(entriesResult, invoicesTruncation);
+    warnings.push(...truncation.truncation_warnings);
+
     return {
       mode,
       date_range,
@@ -128,6 +134,7 @@ export class ProfitabilityCalculator {
       grouped_results,
       warnings,
       _meta: {
+        ...truncation,
         entries_analyzed: entries.length,
         invoices_analyzed: invoices.length,
         calculation_details: calculationDetails,

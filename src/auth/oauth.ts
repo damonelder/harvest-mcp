@@ -5,6 +5,18 @@
 import type { Config } from '../config.js';
 import type { TokenResponse, HarvestAccountsResponse } from '../session/types.js';
 
+export class HarvestOAuthError extends Error {
+  constructor(message: string, public status: number) {
+    super(message);
+    this.name = 'HarvestOAuthError';
+  }
+
+  /** True when Harvest rejected the grant itself (re-authorization needed), not a transient failure. */
+  get isInvalidGrant(): boolean {
+    return this.status === 400 || this.status === 401;
+  }
+}
+
 export class HarvestOAuth {
   private config: Config['harvest'];
 
@@ -35,7 +47,7 @@ export class HarvestOAuth {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': 'HarvestMCP (github.com/your-repo/harvest-mcp)',
+        'User-Agent': 'SpotlightHarvestMCP/0.2.0',
       },
       body: new URLSearchParams({
         code,
@@ -62,7 +74,7 @@ export class HarvestOAuth {
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
         'Accept': 'application/json',
-        'User-Agent': 'HarvestMCP (github.com/your-repo/harvest-mcp)',
+        'User-Agent': 'SpotlightHarvestMCP/0.2.0',
       },
       body: new URLSearchParams({
         refresh_token: refreshToken,
@@ -73,8 +85,7 @@ export class HarvestOAuth {
     });
 
     if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Failed to refresh token: ${response.status} - ${error}`);
+      throw new HarvestOAuthError(`Failed to refresh Harvest token: HTTP ${response.status}`, response.status);
     }
 
     return response.json() as Promise<TokenResponse>;
@@ -87,7 +98,7 @@ export class HarvestOAuth {
     const response = await fetch(`${this.config.authBaseUrl}/api/v2/accounts`, {
       headers: {
         'Authorization': `Bearer ${accessToken}`,
-        'User-Agent': 'HarvestMCP (github.com/your-repo/harvest-mcp)',
+        'User-Agent': 'SpotlightHarvestMCP/0.2.0',
       },
     });
 

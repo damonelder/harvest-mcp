@@ -19,6 +19,7 @@ import type {
   BudgetPerformanceTotals,
   PerformanceRating,
 } from './types.js';
+import { ANALYTICS_PAGINATION, collectTruncation } from './pagination.js';
 
 interface UserProjectData {
   userId: number;
@@ -66,8 +67,8 @@ export class BudgetPerformanceCalculator {
         user_id,
         ...p,
       }),
-      { per_page: 100 },
-      { maxPages: 20 }
+      {},
+      ANALYTICS_PAGINATION
     );
     const entries = entriesResult.items as TimeEntry[];
 
@@ -82,10 +83,12 @@ export class BudgetPerformanceCalculator {
         is_active: true,
         ...p,
       }),
-      { per_page: 100 },
-      { maxPages: 10 }
+      {},
+      { maxPages: 10, perPage: 2000 }
     );
     const projects = projectsResult.items as Project[];
+    const truncation = collectTruncation(entriesResult, projectsResult);
+    warnings.push(...truncation.truncation_warnings);
     const projectMap = new Map(projects.map(p => [p.id, p]));
 
     // Aggregate data by user-project combination
@@ -249,6 +252,7 @@ export class BudgetPerformanceCalculator {
       over_budget_repeat_offenders: repeatOffenders,
       warnings,
       _meta: {
+        ...truncation,
         entries_analyzed: entries.length,
         projects_analyzed: uniqueProjects.size,
         calculation_details: 'Compares actual hours logged vs user budget allocations per project',

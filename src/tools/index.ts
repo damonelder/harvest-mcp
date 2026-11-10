@@ -386,11 +386,15 @@ export function registerTools(
 
   tool(
     'harvest_create_time_entry',
-    'Create a new time entry',
+    'Create a new time entry. Defaults to the signed-in user; pass user_id to log time for another team member (requires Harvest administrator or manager permissions).',
     {
       project_id: z.number().describe('Project ID'),
       task_id: z.number().describe('Task ID'),
       spent_date: isoDate.describe('Date (YYYY-MM-DD)'),
+      user_id: z
+        .number()
+        .optional()
+        .describe('Harvest user ID to log the time for (omit for the signed-in user). The user must be assigned to the project.'),
       hours: z.number().optional().describe('Hours to log (omit to start timer)'),
       notes: z.string().optional().describe('Notes/description'),
       started_time: z.string().optional().describe('Start time (HH:MM, 12h format like "9:00am")'),

@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.2 (2026-11-10)
+- `harvest_create_time_entry` accepts an optional `user_id`, so an administrator or manager can log time for another team member. Omitted, the entry goes to the signed-in user as before. The Harvest client already sent `user_id`; only the tool schema was missing it.
+
 ## 0.2.1 (2026-10-24)
 - `harvest_report_uninvoiced` now returns only projects with uninvoiced time, amounts or expenses (`include_zero` restores the full list), adds totals and a `client_id` filter. The full report (654 projects) was too large for a chat context.
 

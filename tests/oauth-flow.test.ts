@@ -393,6 +393,9 @@ describe('/mcp', () => {
     expect(byName.harvest_list_time_entries.annotations?.readOnlyHint).toBe(true);
     expect(byName.harvest_report_time.annotations?.readOnlyHint).toBe(true);
     expect(byName.harvest_create_time_entry.annotations?.readOnlyHint).toBe(false);
+    const createEntrySchema = (byName.harvest_create_time_entry as any).inputSchema;
+    expect(createEntrySchema.properties.user_id.type).toBe('number');
+    expect(createEntrySchema.required).not.toContain('user_id');
     expect(tools.every((t) => t.annotations !== undefined)).toBe(true);
 
     const init2 = await mcp(tokens.access_token, { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'harvest_init', arguments: {} } });
